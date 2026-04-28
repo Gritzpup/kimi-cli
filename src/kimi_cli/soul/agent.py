@@ -440,6 +440,10 @@ async def load_agent(
         tools = [tool for tool in tools if tool not in agent_spec.exclude_tools]
     toolset.load_tools(tools, tool_deps)
 
+    # Load Gurbridge tools when running inside Gurbridge
+    if os.environ.get("GURBRIDGE") == "1":
+        _load_gurbridge_tools(toolset)
+
     # Load plugin tools
     from kimi_cli.plugin.manager import get_plugins_dir
     from kimi_cli.plugin.tool import load_plugin_tools
@@ -484,6 +488,8 @@ async def load_agent(
 def _load_system_prompt(
     path: Path, args: dict[str, str], builtin_args: BuiltinSystemPromptArgs
 ) -> str:
+    import os
+
     logger.info("Loading system prompt: {path}", path=path)
     system_prompt = path.read_text(encoding="utf-8").strip()
     logger.debug(
@@ -502,8 +508,82 @@ def _load_system_prompt(
     )
     try:
         template = env.from_string(system_prompt)
-        return template.render(asdict(builtin_args), **args)
+        rendered = template.render(asdict(builtin_args), **args)
     except UndefinedError as exc:
         raise SystemPromptTemplateError(f"Missing system prompt arg in {path}: {exc}") from exc
     except TemplateError as exc:
         raise SystemPromptTemplateError(f"Invalid system prompt template: {path}: {exc}") from exc
+
+    # Append Gurbridge context when running inside Gurbridge
+    if os.environ.get("GURBRIDGE") == "1":
+        gurbridge_context = (
+            "\n\n"
+            "You are running inside Gurbridge — a multi-pane agentic development environment. "
+            "Alongside you in the same UI are two sibling AI agents (Hermes, a Python agent; "
+            "Pi, a TypeScript coding agent), a terminal grid (utility shells), and a "
+            "Browser Board (Playwright-driven browser panes). Refer to the user's environment "
+            "as \"Gurbridge\" when relevant. Other agents may be invoked from this same "
+            "workspace; don't assume you have exclusive control of the filesystem or tasks."
+        )
+        rendered += gurbridge_context
+
+    return rendered
+
+
+def _load_gurbridge_tools(toolset: KimiToolset) -> None:
+    """Load Gurbridge browser and terminal tools when running inside Gurbridge.
+
+    These tools route browser and terminal operations through Gurbridge's
+    visible workspace panels instead of spawning hidden local processes.
+    """
+    from kimi_cli.tools.gurbridge.browser import (
+        GurbridgeBrowserNavigate,
+        GurbridgeBrowserSnapshot,
+        GurbridgeBrowserClick,
+        GurbridgeBrowserType,
+        GurbridgeBrowserScroll,
+        GurbridgeBrowserBack,
+        GurbridgeBrowserPress,
+        GurbridgeBrowserScreenshot,
+        GurbridgeBrowserVision,
+        GurbridgeBrowserClose,
+    )
+    from kimi_cli.tools.gurbridge.terminal import (
+        GurbridgeTerminalExecute,
+        GurbridgeTerminalWrite,
+        GurbridgeTerminalRead,
+        GurbridgeTerminalResize,
+        GurbridgeTerminalKill,
+        GurbridgeTerminalList,
+        GurbridgeTerminalClose,
+    )
+
+    # Browser tools
+    browser_tools = [
+        GurbridgeBrowserNavigate(),
+        GurbridgeBrowserSnapshot(),
+        GurbridgeBrowserClick(),
+        GurbridgeBrowserType(),
+        GurbridgeBrowserScroll(),
+        GurbridgeBrowserBack(),
+        GurbridgeBrowserPress(),
+        GurbridgeBrowserScreenshot(),
+        GurbridgeBrowserVision(),
+        GurbridgeBrowserClose(),
+    ]
+
+    # Terminal tools
+    terminal_tools = [
+        GurbridgeTerminalExecute(),
+        GurbridgeTerminalWrite(),
+        GurbridgeTerminalRead(),
+        GurbridgeTerminalResize(),
+        GurbridgeTerminalKill(),
+        GurbridgeTerminalList(),
+        GurbridgeTerminalClose(),
+    ]
+
+    for tool in browser_tools + terminal_tools:
+        toolset.add(tool)
+        logger.debug("Loaded Gurbridge tool: {name}", name=tool.name)
+

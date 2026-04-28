@@ -364,6 +364,11 @@ class Shell:
 
             set_active_theme(self.soul.runtime.config.theme)
 
+        # Initialize skin engine (reads GURBRIDGE_SKIN / KIMI_SKIN env vars)
+        from kimi_cli.skin_engine import get_active_skin
+
+        _active_skin = get_active_skin()
+
         if command is not None:
             # run single command and exit
             logger.info("Running agent with command: {command}", command=command)
@@ -1443,6 +1448,29 @@ class Shell:
         self._background_tasks.clear()
 
 
+def _get_welcome_border_color() -> str:
+    """Get the border color from the active skin, or fall back to Kimi blue."""
+    try:
+        from kimi_cli.skin_engine import get_active_skin
+
+        return get_active_skin().get_color("banner_border", "dodger_blue1")
+    except Exception:
+        return "dodger_blue1"
+
+
+def _get_welcome_logo() -> str:
+    """Get the Rich-markup banner logo from the active skin."""
+    try:
+        from kimi_cli.skin_engine import get_active_banner_logo
+
+        logo = get_active_banner_logo()
+        if logo:
+            return logo
+    except Exception:
+        pass
+    return ""  # fallback to default
+
+
 _KIMI_BLUE = "dodger_blue1"
 _LOGO = f"""\
 [{_KIMI_BLUE}]\
@@ -1465,11 +1493,20 @@ class WelcomeInfoItem:
 
 
 def _print_welcome_info(name: str, info_items: list[WelcomeInfoItem]) -> None:
-    head = Text.from_markup("Welcome to Kimi Code CLI!")
+    from kimi_cli.skin_engine import get_active_welcome
+
+    welcome = get_active_welcome("Welcome to Kimi Code CLI!")
+    head = Text.from_markup(welcome)
     help_text = Text.from_markup("[grey50]Send /help for help information.[/grey50]")
 
+    # Try to use skin's banner logo (Rich markup)
+    logo_text = _get_welcome_logo()
+    if logo_text:
+        logo = Text.from_markup(logo_text)
+    else:
+        logo = Text.from_markup(_LOGO)
+
     # Use Table for precise width control
-    logo = Text.from_markup(_LOGO)
     table = Table(show_header=False, show_edge=False, box=None, padding=(0, 1), expand=False)
     table.add_column(justify="left")
     table.add_column(justify="left")
@@ -1512,11 +1549,15 @@ def _print_welcome_info(name: str, info_items: list[WelcomeInfoItem]) -> None:
 
                     track("update_prompted", current=current_version, latest=latest_version)
 
+    # expand=True so the panel border tracks the terminal width instead of
+    # being sized to the (wide) banner content. Otherwise the border row
+    # wraps to a second line when the terminal is narrower than the banner,
+    # appearing as overflow lines above/below the intro box.
     console.print(
         Panel(
             Group(*rows),
-            border_style=_KIMI_BLUE,
-            expand=False,
+            border_style=_get_welcome_border_color(),
+            expand=True,
             padding=(1, 2),
         )
     )

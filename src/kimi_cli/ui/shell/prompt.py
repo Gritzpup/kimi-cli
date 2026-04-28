@@ -7,6 +7,7 @@ import os
 import random
 import re
 import shlex
+import shutil
 import subprocess
 import time
 from collections import deque
@@ -1514,6 +1515,7 @@ class CustomPromptSession:
         )
         self._install_slash_completion_menu()
         self._install_prompt_buffer_visibility()
+        self._install_input_height_bound()
         self._apply_mode()
 
         # Allow completion to be triggered when the text is changed,
@@ -1584,6 +1586,64 @@ class CustomPromptSession:
             self._should_render_input_buffer
         )
         self._prompt_buffer_container = buffer_container
+
+    def _install_input_height_bound(self) -> None:
+        """Install dynamic input area height bounding to ~3 lines max.
+
+        This prevents the input area from growing unbounded when users paste
+        long text, which would consume most of the workspace panel.
+        """
+        buffer_container = _find_default_buffer_container(
+            self._session.layout.container,
+            self._session.default_buffer,
+        )
+        if buffer_container is None:
+            return
+
+        # Find the Window inside the ConditionalContainer
+        from prompt_toolkit.layout.containers import ConditionalContainer
+
+        window = getattr(buffer_container, "content", None)
+        if not isinstance(window, Window):
+            return
+
+        # Calculate prompt width from the formatted text message
+        def _get_prompt_width() -> int:
+            try:
+                from prompt_toolkit.application import get_app
+
+                app = get_app()
+                columns = app.output.get_size().columns
+                # Get prompt formatted text and measure it
+                prompt_fragments = self._render_message()
+                prompt_width = sum(get_cwidth(fragment[1]) for fragment in prompt_fragments)
+                available_width = columns - prompt_width - 2  # -2 for padding
+                return max(10, available_width) if available_width > 10 else 10
+            except Exception:
+                # Fallback: assume 80 col terminal, 20 char prompt
+                return max(10, 80 - 22)
+
+        # Dynamic height calculation that accounts for line wrapping
+        def _input_height() -> int:
+            try:
+                from prompt_toolkit.application import get_app
+
+                doc = self._session.default_buffer.document
+                available_width = _get_prompt_width()
+                visual_lines = 0
+                for line in doc.lines:
+                    line_width = get_cwidth(line)
+                    if line_width <= 0:
+                        visual_lines += 1
+                    else:
+                        # Ceil division: how many rows does this line need?
+                        visual_lines += max(1, (line_width + available_width - 1) // available_width)
+                # Bound to 1-3 lines (Hermes uses 1-8, we want ~3 max)
+                return min(max(visual_lines, 1), 3)
+            except Exception:
+                return 1
+
+        window.height = _input_height
 
     def _should_show_slash_completion_menu(self) -> bool:
         document = self._session.default_buffer.document
